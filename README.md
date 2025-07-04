@@ -1,12 +1,14 @@
 # Chrony Suite
 
+> **Note:** The Go-based Chrony Suite is the maintained version. The previous Python/Flask implementation is obsolete and will be removed in a future release. Please use the Go version for all new deployments.
+
 A Docker container that provides both a chrony NTP server/client and a RESTful API for managing chrony configuration.
 
 ## Overview
 
 Chrony Suite is an all-in-one solution that runs:
 - **chrony** as both NTP server and client (with `--cap-add=SYS_TIME` to set host time)
-- **Flask API** for remote management of chrony configuration
+- **REST API** for remote management of chrony configuration (Go implementation; Python/Flask version is obsolete)
 - **Health checks** to ensure the service is running properly
 
 ## Features
@@ -194,7 +196,7 @@ The container uses `pool.ntp.org` as the default NTP server.
 
 ### Ports
 - **UDP 123**: NTP service (chrony)
-- **TCP 8291**: REST API (Flask)
+- **TCP 8291**: REST API (Go)
 
 ### Docker Capabilities
 - `--cap-add=SYS_TIME`: Allows chrony to set the host system time
@@ -205,7 +207,8 @@ The container uses `pool.ntp.org` as the default NTP server.
 .
 ├── Dockerfile              # Docker image definition
 ├── chrony.conf             # Chrony configuration
-├── chrony_api_app.py       # Flask API application
+├── chrony_api_app.go       # Go API application (maintained)
+├── chrony_api_app.py       # Flask API application (obsolete, will be removed)
 ├── entrypoint.sh           # Container startup script
 ├── build.sh                # Build script
 ├── run.sh                  # Run script (includes cleanup)
