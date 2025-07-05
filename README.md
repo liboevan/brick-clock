@@ -1,281 +1,265 @@
-# Chrony Suite
+# Brick Clock Service
 
-> **Note:** The Go-based Chrony Suite is the maintained version. The previous Python/Flask implementation is obsolete and will be removed in a future release. Please use the Go version for all new deployments.
+A high-precision Network Time Protocol (NTP) service built with Go and Chrony, providing both client and server capabilities for time synchronization in distributed systems.
 
-A Docker container that provides both a chrony NTP server/client and a RESTful API for managing chrony configuration.
+## 🚀 Features
 
-## Overview
+- **NTP Client Mode**: Synchronize with upstream NTP servers
+- **NTP Server Mode**: Act as a time source for other devices
+- **RESTful API**: Full HTTP API for monitoring and management
+- **Real-time Status**: Live tracking of synchronization status
+- **Server Management**: Add, remove, and configure NTP servers
+- **Activity Monitoring**: Track success/failure statistics
+- **Docker Ready**: Containerized deployment with Alpine Linux
 
-Chrony Suite is an all-in-one solution that runs:
-- **chrony** as both NTP server and client (with `--cap-add=SYS_TIME` to set host time)
-- **REST API** for remote management of chrony configuration (Go implementation; Python/Flask version is obsolete)
-- **Health checks** to ensure the service is running properly
+## 📋 Prerequisites
 
-## Features
+- Docker and Docker Compose
+- Linux environment (for chrony compatibility)
+- Network access to NTP servers
 
-- 🕐 **NTP Server/Client**: Synchronizes time from upstream NTP servers and serves time to other clients
-- 🔧 **RESTful API**: Manage chrony configuration remotely via HTTP endpoints
-- 🐳 **Docker Ready**: Easy deployment with Docker
-- 🔒 **Secure**: Based on Alpine Linux for smaller attack surface
-- 📊 **Health Monitoring**: Built-in health checks
+## 🛠️ Quick Start
 
-## Quick Start
+### Option 1: One-Command Setup (Recommended)
 
-### Option 1: All-in-One (Recommended)
 ```bash
-./run_and_test.sh
+./scripts/quick_start.sh
 ```
-This script will build, run, and test everything automatically.
 
-### Option 2: Step by Step
+This script performs a complete build → run → test cycle.
+
+### Option 2: Step-by-Step Setup
+
 ```bash
-# Build the image
-./build.sh
+# Build the Docker image
+./scripts/build.sh
 
 # Run the container
-./run.sh
+./scripts/run.sh
 
-# Test the API
-./test.sh
+# Test the API endpoints
+./scripts/test.sh
 ```
 
-## API Documentation
+## 📚 Scripts Reference
 
-### Base URL
-```
-http://localhost:8291
-```
+### Main Management Script
 
-### Endpoints
-
-#### 1. Get Chrony Version
-```http
-GET /chrony/version
+```bash
+./scripts/quick_start.sh [command]
 ```
 
-**Response:**
+**Commands:**
+- `build` - Build Docker image only
+- `run` - Run container only  
+- `test` - Test API endpoints only
+- `clean` - Stop and remove containers
+- `logs` - Show container logs
+- `status` - Check container status
+- `all` - Full cycle (default)
+
+### Individual Scripts
+
+| Script | Purpose | Usage |
+|--------|---------|-------|
+| `build.sh` | Build Docker image | `./scripts/build.sh [version]` |
+| `run.sh` | Start container | `./scripts/run.sh [version]` |
+| `test.sh` | Test API endpoints | `./scripts/test.sh [host:port]` |
+| `clean.sh` | Clean up resources | `./scripts/clean.sh` |
+| `config.sh` | Configuration management | `./scripts/config.sh` |
+
+## 🔌 API Endpoints
+
+### Core Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/version` | Application version and build info |
+| `GET` | `/chrony/version` | Chrony daemon version |
+| `GET` | `/chrony/status` | Current synchronization status |
+| `GET` | `/chrony/servers` | List configured NTP servers |
+| `PUT` | `/chrony/servers` | Configure NTP servers |
+| `DELETE` | `/chrony/servers` | Reset to default servers |
+| `PUT` | `/chrony/servers/default` | Set default NTP servers |
+
+### Response Examples
+
+**Status Response:**
 ```json
 {
-  "version": "chrony version 4.6.1",
-  "error": null
-}
-```
-
-#### 2. Get Current Status
-```http
-GET /chrony/status
-```
-
-**Response:**
-```json
-{
-  "server_mode_enabled": true,
   "tracking": {
-    "Reference ID": "7F7F0101 ()",
-    "Stratum": "10",
-    "Ref time (UTC)": "Thu Jul 03 15:41:24 2025",
-    "System time": "0.000000000 seconds fast of NTP time"
+    "Reference ID": "202.118.1.130",
+    "Stratum": "3",
+    "Ref time (UTC)": "Mon Mar 18 10:30:45 2024",
+    "System time": "0.000000000 seconds slow of NTP time",
+    "Last offset": "+0.000123456 seconds",
+    "RMS offset": "0.000123456 seconds",
+    "Frequency": "+0.000 ppm",
+    "Residual freq": "+0.000 ppm",
+    "Skew": "0.000 ppm",
+    "Root delay": "0.001234567 seconds",
+    "Root dispersion": "0.000123456 seconds",
+    "Update interval": "64.0 seconds",
+    "Leap status": "Normal"
   },
-  "tracking_error": null,
   "sources": [
     {
-      "name": "pool.ntp.org",
-      "raw": "^? pool.ntp.org 0 7 0 - +0ns[   +0ns] +/- 0ns"
+      "state": "^",
+      "name": "202.118.1.130",
+      "stratum": "2",
+      "poll": "6",
+      "reach": "377",
+      "lastrx": "19",
+      "offset": "+625ms"
     }
   ],
-  "sources_error": null
+  "activity": {
+    "ok_count": "1234",
+    "failed_count": "5",
+    "bogus_count": "0",
+    "timeout_count": "2"
+  }
 }
 ```
 
-#### 3. Get Current Sources
-```http
-GET /chrony/servers
+## 🔧 Configuration
+
+### Chrony Configuration
+
+The service uses a custom `chrony.conf` with these key settings:
+
+```conf
+# Upstream NTP server
+server pool.ntp.org iburst
+
+# Allow all clients (server mode)
+allow 0.0.0.0/0
+
+# Local stratum for fallback
+local stratum 10
+
+# NTP port
+port 123
 ```
 
-**Response:**
-```json
-{
-  "servers": "MS Name/IP address         Stratum Poll Reach LastRx Last sample\n===============================================================================\n^? pool.ntp.org 0 7 0 - +0ns[   +0ns] +/- 0ns",
-  "error": null
-}
-```
+### Environment Variables
 
-#### 4. Set NTP Servers
-```http
-PUT /chrony/servers
-Content-Type: application/json
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VERSION` | `0.1.0-dev` | Application version |
+| `BUILD_DATETIME` | Current time | Build timestamp |
+| `IMAGE_NAME` | `el/brick-clock` | Docker image name |
+| `CONTAINER_NAME` | `el-brick-clock` | Docker container name |
 
-{
-  "servers": ["pool.ntp.org", "time.google.com", "time.windows.com"]
-}
-```
+## 🌐 Network Ports
 
-**Response:**
-```json
-{
-  "result": [
-    {
-      "server": "pool.ntp.org",
-      "output": "",
-      "error": null
-    },
-    {
-      "server": "time.google.com",
-      "output": "",
-      "error": null
-    }
-  ]
-}
-```
+| Port | Protocol | Purpose |
+|------|----------|---------|
+| `123` | UDP | NTP server/client traffic |
+| `17003` | TCP | HTTP API server |
 
-#### 5. Reset Servers (Delete All)
-```http
-DELETE /chrony/servers
-```
+## 🐳 Docker Deployment
 
-**Response:**
-```json
-{
-  "output": "",
-  "error": null
-}
-```
+### Build Image
 
-#### 6. Set Default Servers
-```http
-PUT /chrony/servers/default
-```
-
-**Response:**
-```json
-{
-  "result": [
-    {
-      "server": "pool.ntp.org",
-      "output": "",
-      "error": null
-    }
-  ]
-}
-```
-
-#### 7. Get Server Mode Status
-```http
-GET /chrony/server-mode
-```
-
-**Response:**
-```json
-{
-  "server_mode_enabled": true
-}
-```
-
-#### 8. Set Server Mode
-```http
-PUT /chrony/server-mode
-Content-Type: application/json
-
-{
-  "enabled": true
-}
-```
-
-**Response:**
-```json
-{
-  "success": true,
-  "server_mode_enabled": true
-}
-```
-
-## Configuration
-
-### Default NTP Servers
-The container uses `pool.ntp.org` as the default NTP server.
-
-### Ports
-- **UDP 123**: NTP service (chrony)
-- **TCP 8291**: REST API (Go)
-
-### Docker Capabilities
-- `--cap-add=SYS_TIME`: Allows chrony to set the host system time
-
-## File Structure
-
-```
-.
-├── Dockerfile              # Docker image definition
-├── chrony.conf             # Chrony configuration
-├── chrony_api_app.go       # Go API application (maintained)
-├── chrony_api_app.py       # Flask API application (obsolete, will be removed)
-├── entrypoint.sh           # Container startup script
-├── build.sh                # Build script
-├── run.sh                  # Run script (includes cleanup)
-├── test.sh                 # API testing script
-├── clean.sh                # Cleanup script
-├── run_and_test.sh         # All-in-one build, run & test script
-└── README.md               # This file
-```
-
-## Development
-
-### Prerequisites
-- Docker
-- curl (for testing)
-- jq (optional, for pretty JSON output)
-
-### Building from Source
 ```bash
-# Build the image
-docker build -f Dockerfile -t el/chrony-suite .
-
-# Run the container (automatically cleans up existing container)
-./run.sh
-
-# Clean up manually if needed
-./clean.sh              # Remove container only
-./clean.sh --image      # Remove container and image
+./scripts/build.sh [version]
 ```
 
-### Testing
+**Examples:**
 ```bash
-# Run comprehensive API tests
-./test.sh
-
-# Test individual endpoints
-curl http://localhost:8291/chrony/status
-curl http://localhost:8291/chrony/version
+./scripts/build.sh                    # Build with default version (0.1.0-dev)
+./scripts/build.sh 1.0.0             # Build with specific version
 ```
 
-## Troubleshooting
+### Run Container
 
-### Container Won't Start
-- Check if port 8291 is available
-- Ensure Docker has permission to add SYS_TIME capability
-- Check container logs: `docker logs el-chrony-suite`
+```bash
+./scripts/run.sh [version]
+```
 
-### API Not Responding
-- Verify container is running: `docker ps`
-- Check if chrony is running: `docker exec el-chrony-suite chronyc tracking`
-- Check API logs: `docker logs el-chrony-suite`
+**Examples:**
+```bash
+./scripts/run.sh                     # Run with default version
+./scripts/run.sh 1.0.0              # Run with specific version
+```
 
-### Time Sync Issues
-- Verify NTP servers are reachable
-- Check chrony configuration: `docker exec el-chrony-suite cat /etc/chrony/chrony.conf`
-- Monitor chrony sources: `docker exec el-chrony-suite chronyc sources`
+## 🔍 Monitoring & Troubleshooting
 
-## Security Considerations
+### Check Service Status
 
-- The container runs with `--cap-add=SYS_TIME` which allows setting system time
-- Only use this container in trusted environments
-- Consider firewall rules to restrict API access
-- The API allows all clients by default (`allow 0.0.0.0/0`)
+```bash
+# Container status
+./scripts/quick_start.sh status
 
-## License
+# View logs
+./scripts/quick_start.sh logs
 
-This project is provided as-is for educational and development purposes.
+# Test API
+curl http://localhost:17003/chrony/status
+```
 
-## Contributing
+### Common Issues
 
-Feel free to submit issues and enhancement requests! 
+1. **Port Conflicts**: Ensure ports 123/UDP and 17003/TCP are available
+2. **Network Access**: Verify connectivity to NTP servers
+3. **Permissions**: Container needs root access for chrony operations
+
+### Log Locations
+
+- **Application Logs**: Docker container logs
+- **Chrony Logs**: `/var/log/chrony/` (inside container)
+
+## 🏗️ Architecture
+
+```
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   HTTP Client   │    │   NTP Client    │    │   NTP Server    │
+│   (Port 17003)  │    │   (Port 123)    │    │   (Port 123)    │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+         │                       │                       │
+         └───────────────────────┼───────────────────────┘
+                                 │
+                    ┌─────────────────┐
+                    │   Go API App    │
+                    │  (brick-clock)   │
+                    └─────────────────┘
+```
+
+## 📈 Performance
+
+- **Accuracy**: Sub-millisecond precision
+- **Latency**: Minimal overhead for time queries
+- **Scalability**: Supports multiple concurrent clients
+- **Reliability**: Automatic failover between NTP servers
+
+## 🔒 Security Considerations
+
+- **Firewall**: Restrict NTP port access in production
+- **Authentication**: Consider implementing API authentication
+- **Network**: Use VPN for secure NTP communication
+- **Updates**: Regularly update chrony for security patches
+
+## 🤝 Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Test thoroughly
+5. Submit a pull request
+
+## 📄 License
+
+This project is part of the Brick ecosystem. See the main repository for license information.
+
+## 📞 Support
+
+For issues and questions:
+- Check the troubleshooting section above
+- Review the API documentation
+- Open an issue in the repository
+
+---
+
+**Version**: 0.1.0-dev  
+**Last Updated**: July 2025

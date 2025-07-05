@@ -41,7 +41,10 @@ test_endpoint() {
 # Test all endpoints
 echo "Starting API tests..."
 
-# 1. Get chrony version
+# 1. Get application version
+test_endpoint "GET" "/version" "" "Get application version"
+
+# 3. Get chrony version (with build info)
 test_endpoint "GET" "/chrony/version" "" "Get chrony version"
 
 # 2. Get current status
