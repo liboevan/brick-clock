@@ -26,23 +26,23 @@ echo "=================================="
 case $ACTION in
     "build")
         print_header "Build"
-        ./build.sh $VERSION_ARG
+        "$SCRIPT_DIR/build.sh" $VERSION_ARG
         ;;
     
     "run")
         print_header "Run"
-        ./run.sh $VERSION_ARG
+        "$SCRIPT_DIR/run.sh" $VERSION_ARG
         ;;
     
     "test")
         print_header "Test"
         wait_for_api
-        ./test.sh localhost:$API_PORT
+        "$SCRIPT_DIR/test.sh" localhost:$API_PORT
         ;;
     
     "clean")
         print_header "Clean"
-        ./clean.sh $2
+        "$SCRIPT_DIR/clean.sh" $2
         ;;
     
     "logs")
@@ -62,11 +62,11 @@ case $ACTION in
         print_header "Full Cycle: Build → Run → Test"
         
         # Build
-        ./build.sh $VERSION_ARG
+        "$SCRIPT_DIR/build.sh" $VERSION_ARG
         echo ""
         
         # Run
-        ./run.sh $VERSION_ARG
+        "$SCRIPT_DIR/run.sh" $VERSION_ARG
         echo ""
         
         # Wait and test
@@ -74,7 +74,7 @@ case $ACTION in
         echo ""
         
         print_info "Testing API endpoints..."
-        ./test.sh localhost:$API_PORT
+        "$SCRIPT_DIR/test.sh" localhost:$API_PORT
         
         echo ""
         print_info "Quick start completed!"

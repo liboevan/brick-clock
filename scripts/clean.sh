@@ -7,25 +7,6 @@ source "$SCRIPT_DIR/config.sh"
 
 print_header "Cleanup"
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
-
-# Function to print colored output
-print_status() {
-    echo -e "${GREEN}[INFO]${NC} $1"
-}
-
-print_warning() {
-    echo -e "${YELLOW}[WARN]${NC} $1"
-}
-
-print_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-}
-
 # Check if container exists and is running
 if docker ps -a --filter name=$CONTAINER_NAME --format "table {{.Names}}" | grep -q $CONTAINER_NAME; then
     print_info "Found $CONTAINER_NAME container, stopping and removing..."

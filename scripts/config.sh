@@ -54,6 +54,10 @@ run_container() {
     print_info "Running $CONTAINER_NAME (version: $VERSION)..."
     docker run -d --name $CONTAINER_NAME \
       --cap-add=SYS_TIME \
+      --security-opt seccomp:unconfined \
+      --network el-brick-network \
+      -e ENVIRONMENT=production \
+      -e LOG_LEVEL=info \
       -p $NTP_PORT:$NTP_PORT/udp \
       -p $API_PORT:$API_PORT \
       $IMAGE_NAME:$VERSION
