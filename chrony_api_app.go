@@ -9,19 +9,28 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
+	"sync"
+	"time"
 )
 
 const (
 	CHRONY_CONF_PATH = "/etc/chrony/chrony.conf"
 	DEFAULT_SERVERS  = "pool.ntp.org"
 	BUILD_INFO_PATH  = "/build-info.json"
+	STATUS_TRACKING    = 1
+	STATUS_SOURCES     = 2
+	STATUS_ACTIVITY    = 4
+	STATUS_CLIENTS     = 8
+	STATUS_SERVER_MODE = 16
+	STATUS_ALL         = STATUS_TRACKING | STATUS_SOURCES | STATUS_ACTIVITY | STATUS_CLIENTS | STATUS_SERVER_MODE
 )
 
 // Build info structure
 type BuildInfo struct {
 	Version        string `json:"version"`
-	BuildDate      string `json:"buildDate"`
+	BuildDateTime  string `json:"buildDateTime"`
 	BuildTimestamp int64  `json:"buildTimestamp"`
 	Environment    string `json:"environment"`
 	Service        string `json:"service"`
@@ -44,15 +53,12 @@ type SetServerModeRequest struct {
 }
 
 type StatusResponse struct {
-	ServerModeEnabled bool                   `json:"server_mode_enabled"`
-	Tracking          map[string]string      `json:"tracking"`
-	TrackingError     string                 `json:"tracking_error"`
-	Sources           []map[string]string    `json:"sources"`
-	SourcesError      string                 `json:"sources_error"`
-	Activity          map[string]string      `json:"activity"`
-	ActivityError     string                 `json:"activity_error"`
-	Clients           []map[string]string    `json:"clients"`
-	ClientsError      string                 `json:"clients_error"`
+	Tracking      map[string]string   `json:"tracking"`
+	TrackingError string              `json:"tracking_error"`
+	Sources       []map[string]string `json:"sources"`
+	SourcesError  string              `json:"sources_error"`
+	Activity      map[string]string   `json:"activity"`
+	ActivityError string              `json:"activity_error"`
 }
 
 type VersionResponse struct {
@@ -72,6 +78,159 @@ type SetServerModeResponse struct {
 
 type ErrorResponse struct {
 	Error string `json:"error"`
+}
+
+// Cache structures for lazy loading
+type CachedData struct {
+	Data      interface{}
+	Timestamp time.Time
+	TTL       time.Duration
+	mutex     sync.RWMutex
+	fetchData func() interface{}
+}
+
+func (c *CachedData) Get() interface{} {
+	c.mutex.RLock()
+	if time.Since(c.Timestamp) < c.TTL {
+		defer c.mutex.RUnlock()
+		return c.Data
+	}
+	c.mutex.RUnlock()
+	
+	// Only refresh when actually requested and stale
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	
+	// Double-check after acquiring write lock
+	if time.Since(c.Timestamp) < c.TTL {
+		return c.Data
+	}
+	
+	// Refresh data here
+	c.Data = c.fetchData()
+	c.Timestamp = time.Now()
+	return c.Data
+}
+
+// Global cache instances
+var (
+	trackingCache  *CachedData
+	sourcesCache   *CachedData
+	activityCache  *CachedData
+	serverModeCache *CachedData
+	clientsCache   *CachedData
+	cacheInitialized bool
+	cacheMutex     sync.Mutex
+)
+
+// Initialize caches
+func initializeCaches() {
+	cacheMutex.Lock()
+	defer cacheMutex.Unlock()
+	
+	if cacheInitialized {
+		return
+	}
+	
+	// Initialize tracking cache (30 second TTL)
+	trackingCache = &CachedData{
+		TTL: 30 * time.Second,
+	}
+	trackingCache.fetchData = func() interface{} {
+		output, err := runChronyc([]string{"tracking"})
+		if err != "" {
+			return map[string]string{"error": err}
+		}
+		return parseTrackingOutput(output)
+	}
+	
+	// Initialize sources cache (30 second TTL)
+	sourcesCache = &CachedData{
+		TTL: 30 * time.Second,
+	}
+	sourcesCache.fetchData = func() interface{} {
+		output, err := runChronyc([]string{"sources"})
+		if err != "" {
+			return []map[string]string{}
+		}
+		return parseSourcesOutput(output)
+	}
+	
+	// Initialize activity cache (30 second TTL)
+	activityCache = &CachedData{
+		TTL: 30 * time.Second,
+	}
+	activityCache.fetchData = func() interface{} {
+		output, err := runChronyc([]string{"activity"})
+		if err != "" {
+			return map[string]string{"error": err}
+		}
+		return parseActivityOutput(output)
+	}
+	
+	// Initialize server mode cache (5 second TTL)
+	serverModeCache = &CachedData{
+		TTL: 5 * time.Second,
+	}
+	serverModeCache.fetchData = func() interface{} {
+		return getServerModeStatus()
+	}
+	
+	// Initialize clients cache (30 second TTL)
+	clientsCache = &CachedData{
+		TTL: 30 * time.Second,
+	}
+	clientsCache.fetchData = func() interface{} {
+		output, err := runChronyc([]string{"clients"})
+		if err != "" {
+			return []map[string]string{}
+		}
+		return parseClientsOutput(output)
+	}
+	
+	cacheInitialized = true
+}
+
+// Invalidate all caches to force refresh
+func invalidateCaches() {
+	if !cacheInitialized {
+		return
+	}
+	
+	// Invalidate tracking cache
+	if trackingCache != nil {
+		trackingCache.mutex.Lock()
+		trackingCache.Timestamp = time.Time{} // Force refresh
+		trackingCache.mutex.Unlock()
+	}
+	
+	// Invalidate sources cache
+	if sourcesCache != nil {
+		sourcesCache.mutex.Lock()
+		sourcesCache.Timestamp = time.Time{} // Force refresh
+		sourcesCache.mutex.Unlock()
+	}
+	
+	// Invalidate activity cache
+	if activityCache != nil {
+		activityCache.mutex.Lock()
+		activityCache.Timestamp = time.Time{} // Force refresh
+		activityCache.mutex.Unlock()
+	}
+	
+	// Invalidate server mode cache
+	if serverModeCache != nil {
+		serverModeCache.mutex.Lock()
+		serverModeCache.Timestamp = time.Time{} // Force refresh
+		serverModeCache.mutex.Unlock()
+	}
+	
+	// Invalidate clients cache
+	if clientsCache != nil {
+		clientsCache.mutex.Lock()
+		clientsCache.Timestamp = time.Time{} // Force refresh
+		clientsCache.mutex.Unlock()
+	}
 }
 
 // Helper function to run chronyc commands
@@ -333,11 +492,16 @@ func parseClientsOutput(output string) []map[string]string {
 func loadBuildInfo() *BuildInfo {
 	data, err := ioutil.ReadFile(BUILD_INFO_PATH)
 	if err != nil {
+		// Log error for debugging
+		fmt.Printf("Error reading build-info.json: %v\n", err)
 		return nil
 	}
 	
 	var buildInfo BuildInfo
 	if err := json.Unmarshal(data, &buildInfo); err != nil {
+		// Log error for debugging
+		fmt.Printf("Error parsing build-info.json: %v\n", err)
+		fmt.Printf("Raw data: %s\n", string(data))
 		return nil
 	}
 	
@@ -347,8 +511,8 @@ func loadBuildInfo() *BuildInfo {
 // Helper function to read version from VERSION file
 // Version and build info (will be replaced during build)
 var (
-	AppVersion    = "0.2.0"
-	BuildDateTime = "2025-07-05T10:37:44Z"
+	AppVersion    = "0.1.0-dev"
+	BuildDateTime = "2025-07-05T10:00:00Z"
 )
 
 func getVersion() string {
@@ -363,13 +527,13 @@ func handleVersion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	
-	version, err := runChronyc([]string{"--version"})
+	version := getVersion()
 	buildInfo := loadBuildInfo()
 	
 	response := VersionResponse{
 		Version:   version,
 		BuildInfo: buildInfo,
-		Error:     err,
+		Error:     "",
 	}
 	
 	w.Header().Set("Content-Type", "application/json")
@@ -398,31 +562,157 @@ func handleStatus(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+
+	initializeCaches()
+
+	flags := STATUS_ALL
+	if flagStr := r.URL.Query().Get("flags"); flagStr != "" {
+		if parsed, err := strconv.Atoi(flagStr); err == nil {
+			flags = parsed
+		}
+	}
+
+	response := make(map[string]interface{})
+
+	if flags&STATUS_TRACKING != 0 {
+		trackingData := trackingCache.Get()
+		tracking, ok := trackingData.(map[string]string)
+		if !ok {
+			tracking = map[string]string{"error": "Failed to parse tracking data"}
+		}
+		response["tracking"] = tracking
+	}
+
+	if flags&STATUS_SOURCES != 0 {
+		sourcesData := sourcesCache.Get()
+		sources, ok := sourcesData.([]map[string]string)
+		if !ok {
+			sources = []map[string]string{}
+		}
+		response["sources"] = sources
+	}
+
+	if flags&STATUS_ACTIVITY != 0 {
+		activityData := activityCache.Get()
+		activity, ok := activityData.(map[string]string)
+		if !ok {
+			activity = map[string]string{"error": "Failed to parse activity data"}
+		}
+		response["activity"] = activity
+	}
+
+	if flags&STATUS_CLIENTS != 0 {
+		clientsData := clientsCache.Get()
+		clients, ok := clientsData.([]map[string]string)
+		if !ok {
+			clients = []map[string]string{}
+		}
+		response["clients"] = clients
+	}
+
+	if flags&STATUS_SERVER_MODE != 0 {
+		serverModeData := serverModeCache.Get()
+		enabled, ok := serverModeData.(bool)
+		if !ok {
+			enabled = false
+		}
+		response["server_mode_enabled"] = enabled
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+func handleTracking(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	
-	serverModeEnabled := getServerModeStatus()
+	// Initialize caches if not already done
+	initializeCaches()
 	
-	trackingRaw, trackingErr := runChronyc([]string{"tracking"})
-	tracking := parseTrackingOutput(trackingRaw)
+	// Get tracking data from cache
+	trackingData := trackingCache.Get()
+	tracking, ok := trackingData.(map[string]string)
+	if !ok {
+		tracking = map[string]string{"error": "Failed to parse tracking data"}
+	}
 	
-	sourcesRaw, sourcesErr := runChronyc([]string{"sources"})
-	sources := parseSourcesOutput(sourcesRaw)
+	response := map[string]interface{}{
+		"tracking": tracking,
+	}
 	
-	activityRaw, activityErr := runChronyc([]string{"activity"})
-	activity := parseActivityOutput(activityRaw)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+func handleSources(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	
-	clientsRaw, clientsErr := runChronyc([]string{"clients"})
-	clients := parseClientsOutput(clientsRaw)
+	// Initialize caches if not already done
+	initializeCaches()
 	
-	response := StatusResponse{
-		ServerModeEnabled: serverModeEnabled,
-		Tracking:          tracking,
-		TrackingError:     trackingErr,
-		Sources:           sources,
-		SourcesError:      sourcesErr,
-		Activity:          activity,
-		ActivityError:     activityErr,
-		Clients:           clients,
-		ClientsError:      clientsErr,
+	// Get sources data from cache
+	sourcesData := sourcesCache.Get()
+	sources, ok := sourcesData.([]map[string]string)
+	if !ok {
+		sources = []map[string]string{}
+	}
+	
+	response := map[string]interface{}{
+		"sources": sources,
+	}
+	
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+func handleActivity(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	
+	// Initialize caches if not already done
+	initializeCaches()
+	
+	// Get activity data from cache
+	activityData := activityCache.Get()
+	activity, ok := activityData.(map[string]string)
+	if !ok {
+		activity = map[string]string{"error": "Failed to parse activity data"}
+	}
+	
+	response := map[string]interface{}{
+		"activity": activity,
+	}
+	
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+func handleClients(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	
+	// Initialize caches if not already done
+	initializeCaches()
+	
+	// Get clients data from cache
+	clientsData := clientsCache.Get()
+	clients, ok := clientsData.([]map[string]string)
+	if !ok {
+		clients = []map[string]string{}
+	}
+	
+	response := map[string]interface{}{
+		"clients": clients,
 	}
 	
 	w.Header().Set("Content-Type", "application/json")
@@ -469,6 +759,9 @@ func handleServers(w http.ResponseWriter, r *http.Request) {
 		// Restart chrony to apply the configuration changes
 		restartSuccess := restartChrony()
 		
+		// Invalidate caches after configuration change
+		invalidateCaches()
+		
 		response := map[string]interface{}{
 			"result": responses,
 			"restart_success": restartSuccess,
@@ -481,6 +774,9 @@ func handleServers(w http.ResponseWriter, r *http.Request) {
 		
 		// Restart chrony to apply the configuration changes
 		restartSuccess := restartChrony()
+		
+		// Invalidate caches after configuration change
+		invalidateCaches()
 		
 		response := map[string]interface{}{
 			"output": output,
@@ -510,6 +806,9 @@ func handleDefaultServers(w http.ResponseWriter, r *http.Request) {
 	// Restart chrony to apply the configuration changes
 	restartSuccess := restartChrony()
 	
+	// Invalidate caches after configuration change
+	invalidateCaches()
+	
 	response := map[string]interface{}{
 		"result": []ServerResponse{
 			{
@@ -528,7 +827,16 @@ func handleDefaultServers(w http.ResponseWriter, r *http.Request) {
 func handleServerMode(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		enabled := getServerModeStatus()
+		// Initialize caches if not already done
+		initializeCaches()
+		
+		// Get server mode from cache
+		serverModeData := serverModeCache.Get()
+		enabled, ok := serverModeData.(bool)
+		if !ok {
+			enabled = false
+		}
+		
 		response := ServerModeResponse{
 			ServerModeEnabled: enabled,
 		}
@@ -543,6 +851,14 @@ func handleServerMode(w http.ResponseWriter, r *http.Request) {
 		}
 		
 		success := setServerModeStatus(req.Enabled)
+		
+		// Invalidate server mode cache after change
+		if cacheInitialized && serverModeCache != nil {
+			serverModeCache.mutex.Lock()
+			serverModeCache.Timestamp = time.Time{} // Force refresh
+			serverModeCache.mutex.Unlock()
+		}
+		
 		response := SetServerModeResponse{
 			Success:           success,
 			ServerModeEnabled: req.Enabled,
@@ -556,15 +872,19 @@ func handleServerMode(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
-	// Define routes
-	http.HandleFunc("/chrony/version", handleVersion)
-	http.HandleFunc("/chrony/status", handleStatus)
-	http.HandleFunc("/chrony/servers", handleServers)
-	http.HandleFunc("/chrony/servers/default", handleDefaultServers)
-	http.HandleFunc("/chrony/server-mode", handleServerMode)
+	// Define routes - Hide chrony implementation details
+	http.HandleFunc("/version", handleVersion)
+	http.HandleFunc("/status", handleStatus)
+	http.HandleFunc("/status/tracking", handleTracking)
+	http.HandleFunc("/status/sources", handleSources)
+	http.HandleFunc("/status/activity", handleActivity)
+	http.HandleFunc("/status/clients", handleClients)
+	http.HandleFunc("/servers", handleServers)
+	http.HandleFunc("/servers/default", handleDefaultServers)
+	http.HandleFunc("/server-mode", handleServerMode)
 	
 	// Application version endpoint
-	http.HandleFunc("/version", handleAppVersion)
+	http.HandleFunc("/app-version", handleAppVersion)
 	
 	// Health check endpoint
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {

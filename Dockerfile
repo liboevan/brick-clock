@@ -6,9 +6,8 @@ WORKDIR /app
 # Install chrony for compilation (needed for chronyc commands)
 RUN apk add --no-cache chrony
 
-# Copy Go source code and version file
+# Copy Go source code
 COPY chrony_api_app.go .
-COPY VERSION .
 
 # Build arguments for version
 ARG VERSION=0.1.0-dev
@@ -19,6 +18,12 @@ ENV BUILD_DATETIME=$BUILD_DATETIME
 # Build the Go application with version and build datetime injected
 RUN go mod init el/brick-clock && \
     go build -ldflags "-X 'main.AppVersion=$VERSION' -X 'main.BuildDateTime=$BUILD_DATETIME'" -o chrony-api-app chrony_api_app.go
+
+# Create VERSION file from build argument
+RUN echo "$VERSION" > /app/VERSION
+
+# Create build-info.json from build arguments
+RUN echo "{\"version\":\"$VERSION\",\"buildDateTime\":\"$BUILD_DATETIME\",\"buildTimestamp\":$(date +%s),\"environment\":\"production\",\"service\":\"brick-clock\",\"description\":\"NTP Time Synchronization\"}" > /app/build-info.json
 
 # Runtime stage
 FROM alpine:latest
@@ -34,14 +39,13 @@ COPY chrony.conf /etc/chrony/chrony.conf
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-# Copy the compiled Go binary from builder stage
+# Copy the compiled Go binary and files from builder stage
 COPY --from=builder /app/chrony-api-app /chrony-api-app
+COPY --from=builder /app/VERSION /VERSION
+COPY --from=builder /app/build-info.json /build-info.json
 
 # Copy scripts
 COPY scripts/ /scripts/
-
-# Create VERSION file from build argument
-RUN echo "$VERSION" > /VERSION
 
 # Expose ports
 EXPOSE 123/udp
