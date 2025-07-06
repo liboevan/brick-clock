@@ -287,17 +287,30 @@ func setServerModeStatus(enabled bool) bool {
 	found := false
 	
 	for _, line := range lines {
-		if strings.TrimSpace(line) != "" && strings.HasPrefix(strings.TrimSpace(line), "allow") {
+		trimmed := strings.TrimSpace(line)
+		if strings.Contains(trimmed, "allow 0.0.0.0/0") {
 			found = true
 			if enabled {
-				newLines = append(newLines, line)
+				// If the line is commented, uncomment it
+				if strings.HasPrefix(trimmed, "#") {
+					newLines = append(newLines, "allow 0.0.0.0/0")
+				} else {
+					newLines = append(newLines, line)
+				}
+			} else {
+				// If the line is not commented, comment it out
+				if !strings.HasPrefix(trimmed, "#") {
+					newLines = append(newLines, "#allow 0.0.0.0/0")
+				} else {
+					newLines = append(newLines, line)
+				}
 			}
-			// else: skip the line to disable
 		} else {
 			newLines = append(newLines, line)
 		}
 	}
 	
+	// If enabling and not found, add the allow line
 	if enabled && !found {
 		newLines = append(newLines, "allow 0.0.0.0/0")
 	}
