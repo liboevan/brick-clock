@@ -66,7 +66,7 @@ run_container() {
 wait_for_api() {
     print_info "Waiting for API to be ready..."
     for i in {1..30}; do
-        if curl -s http://localhost:$API_PORT/chrony/status > /dev/null 2>&1; then
+        if curl -s http://localhost:$API_PORT/status > /dev/null 2>&1; then
             print_info "API is ready!"
             return 0
         fi
@@ -79,7 +79,7 @@ wait_for_api() {
 }
 
 check_api_health() {
-    if curl -s http://localhost:$API_PORT/chrony/status > /dev/null 2>&1; then
+    if curl -s http://localhost:$API_PORT/status > /dev/null 2>&1; then
         echo "✅ API is responding"
     else
         echo "❌ API is not responding"
