@@ -100,6 +100,23 @@ func getServerModeStatus() bool {
 	return false
 }
 
+// Helper function to robustly restart chrony service in Alpine/docker environments
+func restartChrony() bool {
+	// Kill all running chronyd processes
+	killCmd := exec.Command("pkill", "chronyd")
+	_ = killCmd.Run() // Ignore error if not running
+
+	// Start chronyd in the background
+	startCmd := exec.Command("chronyd", "-f", CHRONY_CONF_PATH)
+	err := startCmd.Start()
+	if err != nil {
+		log.Printf("Failed to start chronyd: %v", err)
+		return false
+	}
+	log.Printf("chronyd restarted with PID %d", startCmd.Process.Pid)
+	return true
+}
+
 func setServerModeStatus(enabled bool) bool {
 	content, err := ioutil.ReadFile(CHRONY_CONF_PATH)
 	if err != nil {
@@ -128,7 +145,12 @@ func setServerModeStatus(enabled bool) bool {
 	
 	newContent := strings.Join(newLines, "\n")
 	err = ioutil.WriteFile(CHRONY_CONF_PATH, []byte(newContent), 0644)
-	return err == nil
+	if err != nil {
+		return false
+	}
+	
+	// Restart chrony to apply the configuration changes
+	return restartChrony()
 }
 
 func parseSourcesOutput(output string) []map[string]string {
@@ -444,17 +466,26 @@ func handleServers(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 		
+		// Restart chrony to apply the configuration changes
+		restartSuccess := restartChrony()
+		
 		response := map[string]interface{}{
 			"result": responses,
+			"restart_success": restartSuccess,
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(response)
 		
 	case http.MethodDelete:
 		output, err := runChronyc([]string{"delete", "sources"})
-		response := map[string]string{
+		
+		// Restart chrony to apply the configuration changes
+		restartSuccess := restartChrony()
+		
+		response := map[string]interface{}{
 			"output": output,
 			"error":  err,
+			"restart_success": restartSuccess,
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(response)
@@ -475,6 +506,10 @@ func handleDefaultServers(w http.ResponseWriter, r *http.Request) {
 	
 	// Add default server
 	output, err := runChronyc([]string{"add", "server", DEFAULT_SERVERS})
+	
+	// Restart chrony to apply the configuration changes
+	restartSuccess := restartChrony()
+	
 	response := map[string]interface{}{
 		"result": []ServerResponse{
 			{
@@ -483,6 +518,7 @@ func handleDefaultServers(w http.ResponseWriter, r *http.Request) {
 				Error:  err,
 			},
 		},
+		"restart_success": restartSuccess,
 	}
 	
 	w.Header().Set("Content-Type", "application/json")
