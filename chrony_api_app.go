@@ -732,13 +732,59 @@ func handleClients(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
+// Helper to update server list in chrony.conf
+func updateChronyConfServers(servers []string) error {
+	content, err := ioutil.ReadFile(CHRONY_CONF_PATH)
+	if err != nil {
+		return err
+	}
+	lines := strings.Split(string(content), "\n")
+	var newLines []string
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "server ") {
+			newLines = append(newLines, line)
+		}
+	}
+	// Add new server lines
+	for _, server := range servers {
+		newLines = append(newLines, "server "+server+" iburst")
+	}
+	// Ensure there's an empty line at the end
+	newLines = append(newLines, "")
+	newContent := strings.Join(newLines, "\n")
+	return ioutil.WriteFile(CHRONY_CONF_PATH, []byte(newContent), 0644)
+}
+
+// Helper to read configured servers from chrony.conf
+func getConfiguredServers() []string {
+	content, err := ioutil.ReadFile(CHRONY_CONF_PATH)
+	if err != nil {
+		return []string{}
+	}
+	
+	lines := strings.Split(string(content), "\n")
+	var servers []string
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "server ") {
+			// Extract server name from "server pool.ntp.org iburst"
+			parts := strings.Fields(trimmed)
+			if len(parts) >= 2 {
+				servers = append(servers, parts[1])
+			}
+		}
+	}
+	return servers
+}
+
 func handleServers(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		servers, err := runChronyc([]string{"sources"})
-		response := map[string]string{
-			"servers": servers,
-			"error":   err,
+		// Return configured servers from chrony.conf, not active sources
+		configuredServers := getConfiguredServers()
+		response := map[string]interface{}{
+			"servers": configuredServers,
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(response)
@@ -749,34 +795,22 @@ func handleServers(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Invalid JSON", http.StatusBadRequest)
 			return
 		}
-		
 		if len(req.Servers) == 0 {
 			http.Error(w, "servers must be a non-empty list", http.StatusBadRequest)
 			return
 		}
-		
-		// Delete all current servers
-		runChronyc([]string{"delete", "sources"})
-		
-		// Add new servers
-		var responses []ServerResponse
-		for _, server := range req.Servers {
-			output, err := runChronyc([]string{"add", "server", server})
-			responses = append(responses, ServerResponse{
-				Server: server,
-				Output: output,
-				Error:  err,
-			})
+		// Update chrony.conf with new servers
+		err := updateChronyConfServers(req.Servers)
+		if err != nil {
+			http.Error(w, "Failed to update chrony.conf: "+err.Error(), http.StatusInternalServerError)
+			return
 		}
-		
 		// Restart chrony to apply the configuration changes
 		restartSuccess := restartChrony()
-		
 		// Invalidate caches after configuration change
 		invalidateCaches()
-		
 		response := map[string]interface{}{
-			"result": responses,
+			"result": req.Servers,
 			"restart_success": restartSuccess,
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -784,13 +818,10 @@ func handleServers(w http.ResponseWriter, r *http.Request) {
 		
 	case http.MethodDelete:
 		output, err := runChronyc([]string{"delete", "sources"})
-		
 		// Restart chrony to apply the configuration changes
 		restartSuccess := restartChrony()
-		
 		// Invalidate caches after configuration change
 		invalidateCaches()
-		
 		response := map[string]interface{}{
 			"output": output,
 			"error":  err,
@@ -809,30 +840,25 @@ func handleDefaultServers(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	
-	// Delete all current servers
-	runChronyc([]string{"delete", "sources"})
-	
-	// Add default server
-	output, err := runChronyc([]string{"add", "server", DEFAULT_SERVERS})
-	
+
+	// Persist default server to chrony.conf
+	err := updateChronyConfServers([]string{DEFAULT_SERVERS})
+	if err != nil {
+		http.Error(w, "Failed to update chrony.conf: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
 	// Restart chrony to apply the configuration changes
 	restartSuccess := restartChrony()
-	
+
 	// Invalidate caches after configuration change
 	invalidateCaches()
-	
+
 	response := map[string]interface{}{
-		"result": []ServerResponse{
-			{
-				Server: DEFAULT_SERVERS,
-				Output: output,
-				Error:  err,
-			},
-		},
+		"result": []string{DEFAULT_SERVERS},
 		"restart_success": restartSuccess,
 	}
-	
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 }
