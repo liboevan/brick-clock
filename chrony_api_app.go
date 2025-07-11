@@ -13,6 +13,10 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
+	"github.com/golang-jwt/jwt/v4"
 )
 
 const (
@@ -533,6 +537,56 @@ func getVersion() string {
 	return AppVersion
 }
 
+var publicKey *rsa.PublicKey
+
+func loadPublicKey(path string) *rsa.PublicKey {
+	pemData, err := ioutil.ReadFile(path)
+	if err != nil {
+		log.Fatalf("Failed to read public.pem: %v", err)
+	}
+	block, _ := pem.Decode(pemData)
+	if block == nil {
+		log.Fatalf("Failed to decode PEM block")
+	}
+	// Try PKCS1 first
+	pub, err := x509.ParsePKCS1PublicKey(block.Bytes)
+	if err == nil {
+		return pub
+	}
+	// Try PKIX (most common for 'PUBLIC KEY')
+	parsed, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err == nil {
+		if rsaPub, ok := parsed.(*rsa.PublicKey); ok {
+			return rsaPub
+		}
+		log.Fatalf("Public key is not RSA")
+	}
+	log.Fatalf("Failed to parse public key: %v", err)
+	return nil
+}
+
+func getClaimsFromRequest(r *http.Request) (map[string]interface{}, error) {
+	authHeader := r.Header.Get("Authorization")
+	if !strings.HasPrefix(authHeader, "Bearer ") {
+		return nil, fmt.Errorf("missing or invalid Authorization header")
+	}
+	tokenStr := strings.TrimPrefix(authHeader, "Bearer ")
+	token, err := jwt.Parse(tokenStr, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodRSA); !ok {
+			return nil, fmt.Errorf("unexpected signing method")
+		}
+		return publicKey, nil
+	})
+	if err != nil || !token.Valid {
+		return nil, fmt.Errorf("invalid token: %v", err)
+	}
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		return nil, fmt.Errorf("invalid claims")
+	}
+	return claims, nil
+}
+
 // API Handlers
 func handleVersion(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -781,6 +835,11 @@ func getConfiguredServers() []string {
 func handleServers(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
+		_, err := getClaimsFromRequest(r)
+		if err != nil {
+			http.Error(w, "Unauthorized: "+err.Error(), http.StatusUnauthorized)
+			return
+		}
 		// Return configured servers from chrony.conf, not active sources
 		configuredServers := getConfiguredServers()
 		response := map[string]interface{}{
@@ -790,6 +849,15 @@ func handleServers(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(response)
 		
 	case http.MethodPut:
+		claims, err := getClaimsFromRequest(r)
+		if err != nil {
+			http.Error(w, "Unauthorized: "+err.Error(), http.StatusUnauthorized)
+			return
+		}
+		if permissionCheckEnabled && !hasPermission(claims, "clock/servers") {
+			http.Error(w, "Forbidden: insufficient permissions", http.StatusForbidden)
+			return
+		}
 		var req SetServersRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "Invalid JSON", http.StatusBadRequest)
@@ -800,7 +868,7 @@ func handleServers(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// Update chrony.conf with new servers
-		err := updateChronyConfServers(req.Servers)
+		err = updateChronyConfServers(req.Servers)
 		if err != nil {
 			http.Error(w, "Failed to update chrony.conf: "+err.Error(), http.StatusInternalServerError)
 			return
@@ -817,14 +885,23 @@ func handleServers(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(response)
 		
 	case http.MethodDelete:
-		output, err := runChronyc([]string{"delete", "sources"})
+		claims, err := getClaimsFromRequest(r)
+		if err != nil {
+			http.Error(w, "Unauthorized: "+err.Error(), http.StatusUnauthorized)
+			return
+		}
+		if permissionCheckEnabled && !hasPermission(claims, "clock/servers") {
+			http.Error(w, "Forbidden: insufficient permissions", http.StatusForbidden)
+			return
+		}
+		output, errStr := runChronyc([]string{"delete", "sources"})
 		// Restart chrony to apply the configuration changes
 		restartSuccess := restartChrony()
 		// Invalidate caches after configuration change
 		invalidateCaches()
 		response := map[string]interface{}{
 			"output": output,
-			"error":  err,
+			"error":  errStr,
 			"restart_success": restartSuccess,
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -866,6 +943,12 @@ func handleDefaultServers(w http.ResponseWriter, r *http.Request) {
 func handleServerMode(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
+		_, err := getClaimsFromRequest(r)
+		if err != nil {
+			http.Error(w, "Unauthorized: "+err.Error(), http.StatusUnauthorized)
+			return
+		}
+		// No permission check for GET
 		// Initialize caches if not already done
 		initializeCaches()
 		
@@ -883,6 +966,15 @@ func handleServerMode(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(response)
 		
 	case http.MethodPut:
+		claims, err := getClaimsFromRequest(r)
+		if err != nil {
+			http.Error(w, "Unauthorized: "+err.Error(), http.StatusUnauthorized)
+			return
+		}
+		if permissionCheckEnabled && !hasPermission(claims, "clock/server-mode") {
+			http.Error(w, "Forbidden: insufficient permissions", http.StatusForbidden)
+			return
+		}
 		var req SetServerModeRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "Invalid JSON", http.StatusBadRequest)
@@ -910,8 +1002,60 @@ func handleServerMode(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+var permissionCheckEnabled = true
+
+func init() {
+	if os.Getenv("PERMISSION_CHECK") == "off" {
+		permissionCheckEnabled = false
+		log.Println("WARNING: Permission checks are DISABLED! Only authentication is enforced.")
+	} else {
+		permissionCheckEnabled = true
+	}
+}
+
+// Helper to check if a user has a permission in JWT claims
+func hasPermission(claims map[string]interface{}, perm string) bool {
+	perms, ok := claims["permissions"]
+	if !ok {
+		return false
+	}
+	// permissions can be []interface{} or []string
+	switch v := perms.(type) {
+	case []interface{}:
+		for _, p := range v {
+			if ps, ok := p.(string); ok && ps == perm {
+				return true
+			}
+		}
+	case []string:
+		for _, ps := range v {
+			if ps == perm {
+				return true
+			}
+		}
+	case string:
+		// fallback: comma-separated string
+		for _, ps := range strings.Split(v, ",") {
+			if strings.TrimSpace(ps) == perm {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// Example usage in a handler (replace in all sensitive handlers):
+//
+// claims := getClaimsFromRequest(r) // your JWT parsing logic
+// if permissionCheckEnabled && !hasPermission(claims, "clock/server-mode") {
+//     http.Error(w, "Forbidden: insufficient permissions", http.StatusForbidden)
+//     return
+// }
+// ...proceed with the action...
+
 func main() {
 	// Define routes - Hide chrony implementation details
+	publicKey = loadPublicKey("/etc/brick/clock/public.pem") // adjust path as needed
 	http.HandleFunc("/version", handleVersion)
 	http.HandleFunc("/status", handleStatus)
 	http.HandleFunc("/status/tracking", handleTracking)
