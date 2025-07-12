@@ -971,7 +971,7 @@ func handleServerMode(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Unauthorized: "+err.Error(), http.StatusUnauthorized)
 			return
 		}
-		if permissionCheckEnabled && !hasPermission(claims, "clock/server-mode") {
+		if permissionCheckEnabled && !hasPermission(claims, "clock/server_mode") {
 			http.Error(w, "Forbidden: insufficient permissions", http.StatusForbidden)
 			return
 		}
